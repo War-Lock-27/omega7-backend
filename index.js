@@ -96,7 +96,36 @@ app.get('/api/messages', (req, res) => {
     res.json({ success: true, messages, customers });
 });
 
-// ၄. Broadcast ပို့ခြင်း API (ဖောက်သည်များအားလုံးဆီ ပုံနှင့်စာ တပြိုင်တည်းပို့ရန်)
+// ၄. Dashboard မှနေ၍ Telegram ဖောက်သည်ဆီသို့ တိုက်ရိုက်စာပြန်ရန် API
+app.post('/api/reply', async (req, res) => {
+    try {
+        const { botToken, chatId, message } = req.body;
+        const botData = connectedBots[botToken];
+
+        if (!botData) {
+            return res.status(400).json({ success: false, error: "Bot not connected!" });
+        }
+
+        // Telegram သို့ မက်ဆေ့ခ်ျ ပို့မည်
+        await botData.bot.telegram.sendMessage(chatId, message);
+
+        // ပို့လိုက်သောစာကို messages array ထဲသို့ သိမ်းမည်
+        messages.push({
+            botToken,
+            chatId,
+            name: "Admin",
+            text: message,
+            time: new Date().toLocaleTimeString()
+        });
+
+        res.json({ success: true, message: "Reply sent successfully!" });
+    } catch (error) {
+        console.error("Reply error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ၅. Broadcast ပို့ခြင်း API (ဖောက်သည်များအားလုံးဆီ ပုံနှင့်စာ တပြိုင်တည်းပို့ရန်)
 app.post('/api/broadcast', async (req, res) => {
     try {
         const { botToken, message, imageUrl } = req.body;
