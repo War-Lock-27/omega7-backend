@@ -9,9 +9,10 @@ app.use(cors());
 // Render မှ သတ်မှတ်ပေးမည့် Port သို့မဟုတ် Local တွင် 3000
 const PORT = process.env.PORT || 3000;
 
-// သိုလှောင်ရန် (Database မရှိသေးခင် Memory တွင် ခေတ္တသိမ်းရန်)
+// သိုလှောင်ရန် (Database မရှိသေးခင် Memory တွင် သိမ်းရန်)
 let connectedBots = {}; // token -> { botName, botInstance }
 let customers = [];     // ဝင်လာသော customer များကို သိမ်းရန်
+let messages = [];      // ဖောက်သည်များထံမှ ဝင်လာသော စာများကို သိမ်းရန်
 
 // ပင်မ Server စမ်းသပ်ရန် လင့်ခ်
 app.get('/', (req, res) => {
@@ -29,7 +30,7 @@ app.post('/api/connect-bot', async (req, res) => {
         // Telegraf ဖြင့် Bot ကို Initialize လုပ်ခြင်း
         const bot = new Telegraf(botToken);
 
-        // Bot အလုပ်လုပ်ပုံ Logic မျာ (ဥပမာ- /start နှိပ်လျှင် မိတ်ဆက်စာပို့ရန်)
+        // Bot အလုပ်လုပ်ပုံ Logic များ
         bot.start((ctx) => {
             const chatId = ctx.chat.id;
             const firstName = ctx.from.first_name || "Customer";
@@ -42,7 +43,7 @@ app.post('/api/connect-bot', async (req, res) => {
             ctx.reply(`မင်္ဂလာပါ! OMEGA7 CHATS မှ ကြိုဆိုပါတယ်။ ဘာများ ကူညီပေးရမလဲရှင့်?`);
         });
 
-        // စာများ ပို့လာပါက လက်ခံရန်
+        // စာများ ပို့လာပါက လက်ခံ၍ messages ထဲသို့ သိမ်းမည်
         bot.on('text', (ctx) => {
             const chatId = ctx.chat.id;
             const text = ctx.message.text;
@@ -54,11 +55,19 @@ app.post('/api/connect-bot', async (req, res) => {
                 customers.push(customer);
             }
 
+            // ဝင်လာသော စာများကို သိမ်းဆည်းမည်
+            messages.push({ 
+                botToken, 
+                chatId, 
+                name: firstName, 
+                text, 
+                time: new Date().toLocaleTimeString() 
+            });
+
             console.log(`Message from ${firstName} (${chatId}): ${text}`);
         });
 
-        // Telegram သို့ Webhook ချိတ်ဆက်ခြင်း (Render ၏ Live URL ကို ထည့်ရပါမည်)
-        // ဥပမာ - https://your-app-name.onrender.com/webhook/${botToken}
+        // Telegram သို့ Webhook ချိတ်ဆက်ခြင်း
         const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
         await bot.telegram.setWebhook(`${renderUrl}/webhook/${botToken}`);
 
@@ -71,7 +80,7 @@ app.post('/api/connect-bot', async (req, res) => {
     }
 });
 
-// ၂. Telegram Webhook Endpoint (Telegram ကနေ စာဝင်လာရင် ဒီဆာဗာဆီ ရောက်လာမည်)
+// ၂. Telegram Webhook Endpoint
 app.post('/webhook/:token', (req, res) => {
     const token = req.params.token;
     const botData = connectedBots[token];
@@ -82,7 +91,12 @@ app.post('/webhook/:token', (req, res) => {
     res.sendStatus(200);
 });
 
-// ၃. Broadcast ပို့ခြင်း API (ဖောက်သည်များအားလုံးဆီ ပုံနှင့်စာ တပြိုင်တည်းပို့ရန်)
+// ၃. Dashboard မှ စာများကို လှမ်းယူရန် API
+app.get('/api/messages', (req, res) => {
+    res.json({ success: true, messages, customers });
+});
+
+// ၄. Broadcast ပို့ခြင်း API (ဖောက်သည်များအားလုံးဆီ ပုံနှင့်စာ တပြိုင်တည်းပို့ရန်)
 app.post('/api/broadcast', async (req, res) => {
     try {
         const { botToken, message, imageUrl } = req.body;
@@ -95,7 +109,6 @@ app.post('/api/broadcast', async (req, res) => {
         let successCount = 0;
         let failCount = 0;
 
-        // မှတ်ပုံတင်ထားသော ဖောက်သည်အားလုံးဆီသို့ ပို့ဆောင်ခြင်း
         for (const cust of customers) {
             try {
                 if (imageUrl) {
