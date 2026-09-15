@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
 const { Telegraf } = require('telegraf');
 
 const app = express();
@@ -8,15 +9,35 @@ app.use(cors());
 
 // Render မှ သတ်မှတ်ပေးမည့် Port သို့မဟုတ် Local တွင် 3000
 const PORT = process.env.PORT || 3000;
+const MONGO_URI = process.env.MONGO_URI;
 
-// သိုလှောင်ရန် (Database မရှိသေးခင် Memory တွင် သိမ်းရန်)
-let connectedBots = {}; // token -> { botName, botInstance }
-let customers = [];     // ဝင်လာသော customer များကို သိမ်းရန်
-let messages = [];      // ဖောက်သည်များထံမှ ဝင်လာသော စာများကို သိမ်းရန်
+// MongoDB Database သို့ ချိတ်ဆက်ခြင်း
+mongoose.connect(MONGO_URI)
+    .then(() => console.log('MongoDB connected successfully!'))
+    .catch(err => console.error('MongoDB connection error:', err));
+
+// Mongoose Schemas & Models (ဒေတာအမြဲတမ်းသိမ်းဆည်းရန်)
+const customerSchema = new mongoose.Schema({
+    chatId: { type: Number, unique: true },
+    name: String
+});
+const Customer = mongoose.model('Customer', customerSchema);
+
+const messageSchema = new mongoose.Schema({
+    botToken: String,
+    chatId: Number,
+    name: String,
+    text: String,
+    time: String
+});
+const Message = mongoose.model('Message', messageSchema);
+
+// သိုလှောင်ရန် (Connected Bots များကို Memory တွင် ထိန်းသိမ်းမည်)
+let connectedBots = {}; // token -> { botName, bot }
 
 // ပင်မ Server စမ်းသပ်ရန် လင့်ခ်
 app.get('/', (req, res) => {
-    res.send('OMEGA7 CHATS Backend is running successfully!');
+    res.send('OMEGA7 CHATS Backend is running with MongoDB successfully!');
 });
 
 // ၁. Telegram Bot Token ချိတ်ဆက်ခြင်း API
@@ -27,53 +48,57 @@ app.post('/api/connect-bot', async (req, res) => {
             return res.status(400).json({ success: false, error: "Bot Token is required" });
         }
 
-        // Telegraf ဖြင့် Bot ကို Initialize လုပ်ခြင်း
         const bot = new Telegraf(botToken);
 
-        // Bot အလုပ်လုပ်ပုံ Logic များ
-        bot.start((ctx) => {
+        bot.start(async (ctx) => {
             const chatId = ctx.chat.id;
             const firstName = ctx.from.first_name || "Customer";
             
-            // Customer စာရင်းထဲသို့ ထည့်မည် (မရှိသေးെങ്കിൽ)
-            if (!customers.find(c => c.chatId === chatId)) {
-                customers.push({ chatId, name: firstName });
+            try {
+                // Database ထဲတွင် Customer ရှိမရှိ စစ်ဆေးပြီး မရှိလျှင် အသစ်ထည့်မည်
+                let existingCustomer = await Customer.findOne({ chatId });
+                if (!existingCustomer) {
+                    await Customer.create({ chatId, name: firstName });
+                }
+            } catch (dbErr) {
+                console.error("DB error on start:", dbErr);
             }
 
             ctx.reply(`မင်္ဂလာပါ! OMEGA7 CHATS မှ ကြိုဆိုပါတယ်။ ဘာများ ကူညီပေးရမလဲရှင့်?`);
         });
 
-        // စာများ ပို့လာပါက လက်ခံ၍ messages ထဲသို့ သိမ်းမည်
-        bot.on('text', (ctx) => {
+        bot.on('text', async (ctx) => {
             const chatId = ctx.chat.id;
             const text = ctx.message.text;
             const firstName = ctx.from.first_name || "Customer";
 
-            let customer = customers.find(c => c.chatId === chatId);
-            if (!customer) {
-                customer = { chatId, name: firstName };
-                customers.push(customer);
-            }
+            try {
+                let existingCustomer = await Customer.findOne({ chatId });
+                if (!existingCustomer) {
+                    await Customer.create({ chatId, name: firstName });
+                }
 
-            // ဝင်လာသော စာများကို သိမ်းဆည်းမည်
-            messages.push({ 
-                botToken, 
-                chatId, 
-                name: firstName, 
-                text, 
-                time: new Date().toLocaleTimeString() 
-            });
+                // ဝင်လာသော စာများကို Database ထဲသို့ သိမ်းမည်
+                await Message.create({
+                    botToken,
+                    chatId,
+                    name: firstName,
+                    text,
+                    time: new Date().toLocaleTimeString()
+                });
+            } catch (dbErr) {
+                console.error("DB error on text:", dbErr);
+            }
 
             console.log(`Message from ${firstName} (${chatId}): ${text}`);
         });
 
-        // Telegram သို့ Webhook ချိတ်ဆက်ခြင်း
         const renderUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
         await bot.telegram.setWebhook(`${renderUrl}/webhook/${botToken}`);
 
         connectedBots[botToken] = { botName, bot };
 
-        res.json({ success: true, message: "Bot connected and webhook set successfully!" });
+        res.json({ success: true, message: "Bot connected and webhook set successfully with MongoDB!" });
     } catch (error) {
         console.error("Connect bot error:", error);
         res.status(500).json({ success: false, error: error.message });
@@ -91,9 +116,15 @@ app.post('/webhook/:token', (req, res) => {
     res.sendStatus(200);
 });
 
-// ၃. Dashboard မှ စာများကို လှမ်းယူရန် API
-app.get('/api/messages', (req, res) => {
-    res.json({ success: true, messages, customers });
+// ၃. Dashboard မှ စာများကို Database မှ လှမ်းယူရန် API
+app.get('/api/messages', async (req, res) => {
+    try {
+        const messages = await Message.find().sort({ _id: -1 }).limit(100); // နောက်ဆုံးစာ ၁၀၀ ကို ယူမည်
+        const customers = await Customer.find();
+        res.json({ success: true, messages: messages.reverse(), customers });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
 // ၄. Dashboard မှနေ၍ Telegram ဖောက်သည်ဆီသို့ တိုက်ရိုက်စာပြန်ရန် API
@@ -106,11 +137,10 @@ app.post('/api/reply', async (req, res) => {
             return res.status(400).json({ success: false, error: "Bot not connected!" });
         }
 
-        // Telegram သို့ မက်ဆေ့ခ်ျ ပို့မည်
         await botData.bot.telegram.sendMessage(chatId, message);
 
-        // ပို့လိုက်သောစာကို messages array ထဲသို့ သိမ်းမည်
-        messages.push({
+        // ပို့လိုက်သော Admin စာကို Database ထဲသို့ သိမ်းမည်
+        await Message.create({
             botToken,
             chatId,
             name: "Admin",
@@ -125,7 +155,7 @@ app.post('/api/reply', async (req, res) => {
     }
 });
 
-// ၅. Broadcast ပို့ခြင်း API (ဖောက်သည်များအားလုံးဆီ ပုံနှင့်စာ တပြိုင်တည်းပို့ရန်)
+// ၅. Broadcast ပို့ခြင်း API
 app.post('/api/broadcast', async (req, res) => {
     try {
         const { botToken, message, imageUrl } = req.body;
@@ -135,6 +165,7 @@ app.post('/api/broadcast', async (req, res) => {
             return res.status(400).json({ success: false, error: "Bot not found or not connected!" });
         }
 
+        const customers = await Customer.find();
         let successCount = 0;
         let failCount = 0;
 
