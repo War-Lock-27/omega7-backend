@@ -21,7 +21,7 @@ const customerSchema = new mongoose.Schema({
     chatId: { type: Number, unique: true },
     name: String
 });
-const Customer = mongoose.model('Customer', customerSchema);
+const Customer = mongoose.models.Customer || mongoose.model('Customer', customerSchema);
 
 const messageSchema = new mongoose.Schema({
     botToken: String,
@@ -30,7 +30,7 @@ const messageSchema = new mongoose.Schema({
     text: String,
     time: String
 });
-const Message = mongoose.model('Message', messageSchema);
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
 
 // သိုလှောင်ရန် (Connected Bots များကို Memory တွင် ထိန်းသိမ်းမည်)
 let connectedBots = {}; // token -> { botName, bot }
@@ -55,7 +55,6 @@ app.post('/api/connect-bot', async (req, res) => {
             const firstName = ctx.from.first_name || "Customer";
             
             try {
-                // Database ထဲတွင် Customer ရှိမရှိ စစ်ဆေးပြီး မရှိလျှင် အသစ်ထည့်မည်
                 let existingCustomer = await Customer.findOne({ chatId });
                 if (!existingCustomer) {
                     await Customer.create({ chatId, name: firstName });
@@ -78,7 +77,6 @@ app.post('/api/connect-bot', async (req, res) => {
                     await Customer.create({ chatId, name: firstName });
                 }
 
-                // ဝင်လာသော စာများကို Database ထဲသို့ သိမ်းမည်
                 await Message.create({
                     botToken,
                     chatId,
@@ -119,7 +117,7 @@ app.post('/webhook/:token', (req, res) => {
 // ၃. Dashboard မှ စာများကို Database မှ လှမ်းယူရန် API
 app.get('/api/messages', async (req, res) => {
     try {
-        const messages = await Message.find().sort({ _id: -1 }).limit(100); // နောက်ဆုံးစာ ၁၀၀ ကို ယူမည်
+        const messages = await Message.find().sort({ _id: -1 }).limit(100);
         const customers = await Customer.find();
         res.json({ success: true, messages: messages.reverse(), customers });
     } catch (error) {
@@ -139,7 +137,6 @@ app.post('/api/reply', async (req, res) => {
 
         await botData.bot.telegram.sendMessage(chatId, message);
 
-        // ပို့လိုက်သော Admin စာကို Database ထဲသို့ သိမ်းမည်
         await Message.create({
             botToken,
             chatId,
